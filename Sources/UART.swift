@@ -153,6 +153,7 @@ public enum IOCTLError: Error {
 
 /// UART via SysFS
 public final class SysFSUART: UARTInterface {
+
     var device: String
     var tty: termios
     var fd: Int32
@@ -177,13 +178,13 @@ public final class SysFSUART: UARTInterface {
             let ret = tcgetattr(fd, &tty)
 
             guard ret == 0 else {
-	        close(fd)
+                close(fd)
                 perror("Couldn't get terminal attributes")
                 continue
             }
 
             return
-	}
+        }
 
         return nil
     }
@@ -193,6 +194,38 @@ public final class SysFSUART: UARTInterface {
     }
 
     public func configureInterface(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType) {
+        do {
+            try configureInterfaceOrThrow(speed: speed, bitsPerChar: bitsPerChar, stopBits: stopBits, parity: parity)
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func readString() -> String {
+        do {
+            return try readStringOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func readLine() -> String {
+        do {
+            return try readLineOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func readData() -> [CChar] {
+        do {
+            return try readDataOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func configureInterfaceOrThrow(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType) throws {
         speed.configure(&tty)
 
         bitsPerChar.configure(&tty)
@@ -209,7 +242,7 @@ public final class SysFSUART: UARTInterface {
         parity.configure(&tty)
         stopBits.configure(&tty)
 
-        applyConfiguration()
+        try applyConfiguration()
     }
     
     public func hasAvailableData() throws -> Bool {
@@ -220,16 +253,15 @@ public final class SysFSUART: UARTInterface {
         return bytesToRead > 0
     }
 
-    public func readLine() -> String {
+    public func readLineOrThrow() throws -> String {
         var buf = [CChar](repeating:0, count: 4097) //4096 chars at max in canonical mode
-        return buf.withUnsafeMutableBufferPointer  { ptr -> String in
+        return try buf.withUnsafeMutableBufferPointer  { ptr -> String in
             let newLineChar = CChar(UInt8(ascii: "\n"))
             var pos = 0
             repeat {
                 let n = read(fd, ptr.baseAddress! + pos, MemoryLayout<CChar>.stride)
                 if n<0 {
-                    perror("Error while reading from UART")
-                    abort()
+                    throw SwiftyGPIO.IoError(.read, detail: "Error while reading from UART")
                 }
                 pos += 1
             } while (ptr[pos-1] != newLineChar) && (pos < ptr.count-1)
@@ -238,19 +270,18 @@ public final class SysFSUART: UARTInterface {
         }
     }
 
-    public func readString() -> String {
-        var buf = readData()
+    public func readStringOrThrow() throws -> String {
+        var buf = try readDataOrThrow()
         buf.append(0) //Add terminator to convert cString correctly
         return String(cString: &buf)
     }
 
-    public func readData() -> [CChar] {
+    public func readDataOrThrow() throws -> [CChar] {
         var buf = [CChar](repeating:0, count: 4096) //4096 chars at max in canonical mode
 
         let n = read(fd, &buf, buf.count * MemoryLayout<CChar>.stride)
         if n<0 {
-            perror("Error while reading from UART")
-            abort()
+            throw SwiftyGPIO.IoError(.read, detail: "Error while reading from UART")
         }
         return Array(buf[0..<n])
     }
@@ -268,10 +299,9 @@ public final class SysFSUART: UARTInterface {
         tcdrain(fd)
     }
 
-    private func applyConfiguration() {
+    private func applyConfiguration() throws {
         if tcsetattr (fd, TCSANOW, &tty) != 0 {
-            perror("Couldn't set terminal attributes")
-            abort()
+            throw SwiftyGPIO.IoError(.internalError, detail: "Couldn't set terminal attributes")
         }
     }
 

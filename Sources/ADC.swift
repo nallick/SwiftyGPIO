@@ -77,7 +77,7 @@ public final class SysFSADC: ADCInterface {
     }
 
     public func getSample() throws -> Int {
-        if fd <= 0 { self.openADC() }
+        if fd <= 0 { try self.openADC() }
 
         guard fd > 0 else {
             throw ADCError.fileError
@@ -117,15 +117,15 @@ public final class SysFSADC: ADCInterface {
         }
     }
 
-    private func openADC() {
+    private func openADC() throws {
         let fd  = open(adcPath, O_RDONLY)
         self.fd = fd
 
         if fd < 0 {
             #if swift(>=3.1)
-            fatalError("Couldn't open ADC device: \(String(describing: strerror(errno)))")
+            throw SwiftyGPIO.IoError(.open, detail: "Couldn't open ADC device: \(String(describing: strerror(errno)))")
             #else
-            fatalError("Couldn't open ADC device: \(strerror(errno))")
+            throw SwiftyGPIO.IoError(.open, detail: "Couldn't open ADC device: \(strerror(errno))")
             #endif
         }
     }
@@ -138,6 +138,6 @@ public final class SysFSADC: ADCInterface {
 }
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX) || os(iOS)
+#if !os(Linux)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

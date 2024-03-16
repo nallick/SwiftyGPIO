@@ -77,6 +77,12 @@ public protocol PWMOutput {
     func sendDataWithPattern(values: [UInt8])
     func waitOnSendData()
     func cleanupPattern()
+
+    func initPWMOrThrow() throws
+    func initPWMPatternOrThrow(bytes count: Int, at frequency: Int, with resetDelay: Int, dutyzero: Int, dutyone: Int) throws
+    func sendDataWithPatternOrThrow(values: [UInt8]) throws
+    func waitOnSendDataOrThrow() throws
+    func cleanupPatternOrThrow() throws
 }
 
 public class RaspberryPWM: PWMOutput {
@@ -121,18 +127,59 @@ public class RaspberryPWM: PWMOutput {
 
     /// Init PWM on this pin, set alternative function
     public func initPWM() {
+        do {
+            try initPWMOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func initPWMPattern(bytes count: Int, at frequency: Int, with resetDelay: Int, dutyzero: Int, dutyone: Int) {
+        do {
+            try initPWMPatternOrThrow(bytes: count, at: frequency, with: resetDelay, dutyzero: dutyzero, dutyone: dutyone)
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func sendDataWithPattern(values: [UInt8]) {
+        do {
+            try sendDataWithPatternOrThrow(values: values)
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func waitOnSendData() {
+        do {
+            try waitOnSendDataOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func cleanupPattern() {
+        do {
+            try cleanupPatternOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    public func initPWMOrThrow() throws {
         var mem_fd: Int32 = 0
 
         //The only mem device that support PWM is /dev/mem
         mem_fd=open("/dev/mem", O_RDWR | O_SYNC)
 
         guard mem_fd > 0 else {
-            fatalError("Can't open /dev/mem , use sudo!")
+            throw SwiftyGPIO.IoError(.open, detail: "Can't open /dev/mem , use sudo!")
         }
+        defer { close(mem_fd) }
 
-        gpioBasePointer = memmap(from: mem_fd, at: GPIO_BASE)
-        pwmBasePointer = memmap(from: mem_fd, at: PWM_BASE)
-        clockBasePointer = memmap(from: mem_fd, at: CLOCK_BASE)
+        gpioBasePointer = try memmap(from: mem_fd, at: GPIO_BASE)
+        pwmBasePointer = try memmap(from: mem_fd, at: PWM_BASE)
+        clockBasePointer = try memmap(from: mem_fd, at: CLOCK_BASE)
 
         let DMAOffsets: [UInt] = [0x00007000, 0x00007100, 0x00007200, 0x00007300,
                                  0x00007400, 0x00007500, 0x00007600, 0x00007700,
@@ -148,10 +195,8 @@ public class RaspberryPWM: PWMOutput {
         let pageOffset = Int( dma_addr % UInt(PAGE_SIZE) )
         dma_addr -= UInt(pageOffset)
 
-        let dma_map = UnsafeMutableRawPointer(memmap(from: mem_fd, at: dma_addr))
+        let dma_map = UnsafeMutableRawPointer(try memmap(from: mem_fd, at: dma_addr))
         dmaBasePointer = (dma_map + pageOffset).assumingMemoryBound(to: UInt32.self)
-
-        close(mem_fd)
 
         // set PWM alternate function for this GPIO
         setAlt()
@@ -192,7 +237,7 @@ public class RaspberryPWM: PWMOutput {
     }
 
     /// Maps a block of memory and returns the pointer
-    internal func memmap(from mem_fd: Int32, at offset: UInt) -> UnsafeMutablePointer<UInt32> {
+    internal func memmap(from mem_fd: Int32, at offset: UInt) throws -> UnsafeMutablePointer<UInt32> {
         let m = mmap(
             nil,                 //Any adddress in our space will do
             PAGE_SIZE,          //Map length
@@ -203,8 +248,7 @@ public class RaspberryPWM: PWMOutput {
             )!
 
         if (Int(bitPattern: m) == -1) {    //MAP_FAILED not available, but its value is (void*)-1
-            perror("mmap error")
-            abort()
+            throw SwiftyGPIO.IoError(.internalError, detail: "mmap error")
         }
         let pointer = m.assumingMemoryBound(to: UInt32.self)
 
@@ -286,24 +330,24 @@ extension RaspberryPWM {
     }
 
     /// Wait for any executing DMA operation to complete before returning.
-    internal func dma_wait() {
+    internal func dma_wait() throws {
         while (dmaBasePointer.pointee & DMACS_ACTIVE > 0) && !(dmaBasePointer.pointee & DMACS_ERROR > 0) {
             usleep(10)
         }
 
         if (dmaBasePointer.pointee & DMACS_ERROR)>0 {
-            fatalError("DMA Error: \(dmaBasePointer.advanced(by: 8).pointee)")
+            throw SwiftyGPIO.IoError(.internalError, detail: "DMA Error: \(dmaBasePointer.advanced(by: 8).pointee)")
         }
     }
 
     /// Wait for the last signal to be completely generated
-    public func waitOnSendData() {
-        dma_wait()
+    public func waitOnSendDataOrThrow() throws {
+        try dma_wait()
     }
 
     /// Stop the PWM and clean up any related structure
-    public func cleanupPattern() {
-        dma_wait()
+    public func cleanupPatternOrThrow() throws {
+        try dma_wait()
         // Stop the PWM
         pwmBasePointer.pointee = 0
         usleep(10)
@@ -311,7 +355,7 @@ extension RaspberryPWM {
         clockBasePointer.advanced(by: 40).pointee = CLKM_PASSWD | CLKM_CTL_KILL     //Set KILL flag
         usleep(10)
 
-        mailbox.cleanup()
+        try mailbox.cleanupOrThrow()
     }
 
     /// Initiliazes the PWM signal generator
@@ -322,10 +366,10 @@ extension RaspberryPWM {
     /// - Parameter dutyzero: duty cycle of the pattern for zero
     /// - Parameter dutyone: duty cycle of the pattern for one
     ///
-    public func initPWMPattern(bytes count: Int, at frequency: Int, with resetDelay: Int, dutyzero: Int, dutyone: Int) {
+    public func initPWMPatternOrThrow(bytes count: Int, at frequency: Int, with resetDelay: Int, dutyzero: Int, dutyone: Int) throws {
 
         (zeroPattern, onePattern, symbolBits) = getRepresentation(zero: dutyzero, one: dutyone)
-        guard symbolBits > 0 else {fatalError("Couldn't generate a valid pattern for the provided duty cycle values, try with more spaced values.")}
+        guard symbolBits > 0 else {throw SwiftyGPIO.IoError(.internalError, detail: "Couldn't generate a valid pattern for the provided duty cycle values, try with more spaced values.")}
 
         patternFrequency = frequency
         patternDelay = resetDelay
@@ -337,9 +381,7 @@ extension RaspberryPWM {
 
         // Round up to page size multiple
         let mboxsize = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
-        mailbox = MailBox(handle: -1, size: mboxsize, isRaspi2: BCM2708_PERI_BASE != 0x20000000)
-
-        guard let mailbox = mailbox else {fatalError("Could allocate mailbox.")}
+        mailbox = try MailBox(withHandle: -1, size: mboxsize, isRaspi2: BCM2708_PERI_BASE != 0x20000000)
 
         dmaCallbackPointer = mailbox.baseVirtualAddress.assumingMemoryBound(to: DMACallback.self)
         pwmRawPointer = (mailbox.baseVirtualAddress + MemoryLayout<DMACallback>.stride).assumingMemoryBound(to: UInt32.self)
@@ -398,12 +440,12 @@ extension RaspberryPWM {
     }
 
     /// Send data using the pattern information already provided
-    public func sendDataWithPattern(values: [UInt8]) {
+    public func sendDataWithPatternOrThrow(values: [UInt8]) throws {
 
-        guard symbolBits > 0 else {fatalError("Couldn't generate a valid pattern for the provided duty cycle values, try with more spaced values.")}
+        guard symbolBits > 0 else {throw SwiftyGPIO.IoError(.internalError, detail: "Couldn't generate a valid pattern for the provided duty cycle values, try with more spaced values.")}
 
         // Wait for the previous signal to end
-        dma_wait()
+        try dma_wait()
 
         // Convert from raw uint8 data to a sequence of patterns
         let stream = dataToBitStream(data: values, zero: zeroPattern, one: onePattern, width: symbolBits)
@@ -644,6 +686,6 @@ let DMATI_DEST_DREQ: UInt32 = (1 << 6)
 let DMATI_WAIT_RESP: UInt32 = (1 << 3)
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX) || os(iOS)
+#if !os(Linux)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

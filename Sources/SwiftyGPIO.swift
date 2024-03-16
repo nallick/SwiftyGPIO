@@ -54,34 +54,52 @@ public class GPIO {
 
     public var direction: GPIODirection {
         set(dir) {
-            if !exported {enableIO(id)}
-            performSetting("gpio" + String(id) + "/direction", value: dir.rawValue)
+            do {
+                try setDirection(dir)
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
         get {
-            if !exported { enableIO(id)}
-            return GPIODirection(rawValue: getStringValue("gpio"+String(id)+"/direction")!)!
+            do {
+                return try getDirection()
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
     }
 
     public var edge: GPIOEdge {
-        set(dir) {
-            if !exported {enableIO(id)}
-            performSetting("gpio"+String(id)+"/edge", value: dir.rawValue)
+        set(edge) {
+            do {
+                try setEdge(edge)
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
         get {
-            if !exported {enableIO(id)}
-            return GPIOEdge(rawValue: getStringValue("gpio"+String(id)+"/edge")!)!
+            do {
+                return try getEdge()
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
     }
 
     public var activeLow: Bool {
-        set(act) {
-            if !exported {enableIO(id)}
-            performSetting("gpio"+String(id)+"/active_low", value: act ? "1":"0")
+        set(activeLow) {
+            do {
+                try setActiveLow(activeLow)
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
         get {
-            if !exported {enableIO(id)}
-            return getIntValue("gpio"+String(id)+"/active_low")==0
+            do {
+                return try getActiveLow()
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
     }
 
@@ -95,13 +113,67 @@ public class GPIO {
     }
 
     public var value: Int {
-        set(val) {
-            if !exported {enableIO(id)}
-            performSetting("gpio"+String(id)+"/value", value: val)
+        set(value) {
+            do {
+                try setValue(value)
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
         }
         get {
-            if !exported {enableIO(id)}
-            return getIntValue("gpio"+String(id)+"/value")!
+            do {
+                return try getValue()
+            } catch {
+                SwiftyGPIO.abort(logging: error)
+            }
+        }
+    }
+
+    public func setDirection(_ direction: GPIODirection) throws {
+        if !exported {try enableIOOrThrow(id)}
+        try performSetting("gpio" + String(id) + "/direction", value: direction.rawValue)
+    }
+
+    public func getDirection() throws -> GPIODirection {
+        let string = try getStringValueAfterEnablingIO("gpio" + String(id) + "/direction")
+        guard let direction = GPIODirection(rawValue: string) else { throw SwiftyGPIO.IoError(.valueUndefined, detail: #"No direction for "\#(string)""#) }
+        return direction
+    }
+
+    public func setEdge(_ edge: GPIOEdge) throws {
+        if !exported {try enableIOOrThrow(id)}
+        try performSetting("gpio" + String(id) + "/edge", value: edge.rawValue)
+    }
+
+    public func getEdge() throws -> GPIOEdge {
+        let string = try getStringValueAfterEnablingIO("gpio" + String(id) + "/edge")
+        guard let edge = GPIOEdge(rawValue: string) else { throw SwiftyGPIO.IoError(.valueUndefined, detail: #"No edge for "\#(string)""#) }
+        return edge
+    }
+
+    public func setActiveLow(_ activeLow: Bool) throws {
+        if !exported {try enableIOOrThrow(id)}
+        try performSetting("gpio" + String(id) + "/active_low", value: activeLow ? "1" : "0")
+    }
+
+    public func getActiveLow() throws -> Bool {
+        let integer = try getIntValueAfterEnablingIO("gpio" + String(id) + "/active_low")
+        return integer == 0
+    }
+
+    public func setValue(_ value: Int) throws {
+        if !exported {try enableIOOrThrow(id)}
+        try performSetting("gpio" + String(id) + "/value", value: value)
+    }
+
+    public func getValue() throws -> Int {
+        return try getIntValueAfterEnablingIO("gpio" + String(id) + "/value")
+    }
+
+    //  Optional throwing pre-initialization to catch potential aborts.
+    public func preEnableIO() throws {
+        if !exported {
+            try enableIOOrThrow(id)
         }
     }
 
@@ -149,27 +221,47 @@ public class GPIO {
 fileprivate extension GPIO {
 
     func enableIO(_ id: Int) {
-        writeToFile(GPIOBASEPATH+"export", value:String(id))
+        do {
+            try enableIOOrThrow(id)
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
+    }
+
+    func getStringValueAfterEnablingIO(_ filename: String) throws -> String {
+        if !exported { try enableIOOrThrow(id) }
+        guard let result = try getStringValue(filename) else { throw SwiftyGPIO.IoError(.valueUndefined, detail: #"No value for "\#(filename)""#) }
+        return result
+    }
+
+    func getIntValueAfterEnablingIO(_ filename: String) throws -> Int {
+        if !exported { try enableIOOrThrow(id) }
+        guard let result = try getIntValue(filename) else { throw SwiftyGPIO.IoError(.valueUndefined, detail: #"No value for "\#(filename)""#) }
+        return result
+    }
+
+    func enableIOOrThrow(_ id: Int) throws {
+        try writeToFile(GPIOBASEPATH+"export", value:String(id))
         exported = true
     }
 
-    func performSetting(_ filename: String, value: String) {
-        writeToFile(GPIOBASEPATH+filename, value:value)
+    func performSetting(_ filename: String, value: String) throws {
+        try writeToFile(GPIOBASEPATH+filename, value:value)
     }
 
-    func performSetting(_ filename: String, value: Int) {
-        writeToFile(GPIOBASEPATH+filename, value: String(value))
+    func performSetting(_ filename: String, value: Int) throws {
+        try writeToFile(GPIOBASEPATH+filename, value: String(value))
     }
 
-    func getStringValue(_ filename: String) -> String? {
-        return readFromFile(GPIOBASEPATH+filename)
+    func getStringValue(_ filename: String) throws -> String? {
+        return try readFromFile(GPIOBASEPATH+filename)
     }
 
-    func getIntValue(_ filename: String) -> Int? {
-        return readFromFile(GPIOBASEPATH+filename).flatMap(Int.init)
+    func getIntValue(_ filename: String) throws -> Int? {
+        return try readFromFile(GPIOBASEPATH+filename).flatMap(Int.init)
     }
 
-    func writeToFile(_ path: String, value: String) {
+    func writeToFile(_ path: String, value: String) throws {
         let fp = fopen(path, "w")
         guard fp != nil else { return }
         defer { fclose(fp) }
@@ -179,13 +271,12 @@ fileprivate extension GPIO {
         }
         if res < 0 {
             if ferror(fp) != 0 {
-                perror("Error while writing to file")
-                abort()
+                throw SwiftyGPIO.IoError(.write, detail: "Error while writing to file")
             }
         }
     }
 
-    func readFromFile(_ path: String) -> String? {
+    func readFromFile(_ path: String) throws -> String? {
         let MAXLEN = 8
 
         let fp = fopen(path, "r")
@@ -193,13 +284,12 @@ fileprivate extension GPIO {
         defer { fclose(fp) }
         var buf = (CChar(0), CChar(0), CChar(0), CChar(0),
                    CChar(0), CChar(0), CChar(0), CChar(0))
-        return withUnsafeMutableBytes(of: &buf) { buffer in
+        return try withUnsafeMutableBytes(of: &buf) { buffer in
             precondition(buffer.count == MAXLEN)
             let len = fread(buffer.baseAddress, MAXLEN, 1, fp)
             if len < MAXLEN {
                 if ferror(fp) != 0 {
-                    perror("Error while reading from file")
-                    abort()
+                    throw SwiftyGPIO.IoError(.read, detail: "Error while reading from file")
                 }
             }
 
@@ -330,7 +420,8 @@ public final class RaspberryGPIO: GPIO {
         return true
     }
 
-    private func initIO() {
+    //  Optional throwing pre-initialization to catch potential aborts.
+    public func preInitializeIO() throws {
         var mem_fd: Int32 = 0
 
         //Try to open one of the mem devices
@@ -341,8 +432,9 @@ public final class RaspberryGPIO: GPIO {
             }
         }
         guard mem_fd > 0 else {
-            fatalError("Can't open /dev/mem , use sudo!")
+            throw SwiftyGPIO.IoError(.open, detail: "Can't open /dev/mem , use sudo!")
         }
+        defer { close(mem_fd) }
 
         let gpio_map = mmap(
             nil,                 //Any adddress in our space will do
@@ -353,11 +445,8 @@ public final class RaspberryGPIO: GPIO {
             off_t(GPIO_BASE)     //Offset to GPIO peripheral, i.e. GPFSEL0
             )!
 
-        close(mem_fd)
-
         if (Int(bitPattern: gpio_map) == -1) {    //MAP_FAILED not available, but its value is (void*)-1
-            perror("mmap error")
-            abort()
+            throw SwiftyGPIO.IoError(.internalError, detail: "mmap error")
         }
         gpioBasePointer = gpio_map.assumingMemoryBound(to: UInt32.self)
 
@@ -366,6 +455,14 @@ public final class RaspberryGPIO: GPIO {
         gpioClearPointer = gpioBasePointer.advanced(by: 10) // GPCLR0
 
         inited = true
+    }
+
+    private func initIO() {
+        do {
+            try preInitializeIO()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
     }
 
     private func gpioAsInput() {
@@ -544,6 +641,6 @@ extension GPIOPull: Codable { }
 let PAGE_SIZE = (1 << 12)
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX) || os(iOS)
+#if !os(Linux)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

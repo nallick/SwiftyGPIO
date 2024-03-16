@@ -81,38 +81,59 @@ public struct MailBox {
 
     /// Initializes a new mailbox with size and an handle (-1 per-session handle)
     public init?(handle: Int = -1, size: Int, isRaspi2: Bool = true) {
+        do {
+            try self.init(withHandle: handle, size: size, isRaspi2: isRaspi2)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Initializes a new mailbox with size and an handle (-1 per-session handle)
+    public init(withHandle handle: Int, size: Int, isRaspi2: Bool = true) throws {
         let MEM_FLAG_L1_NONALLOCATING = isRaspi2 ? 0x4 : 0xC
 
         mailboxFd = Int32(handle)
         self.size = size
 
         // MEM_FLAG_L1_NONALLOCATING  = (MEM_FLAG_DIRECT | MEM_FLAG_COHERENT) --> Allocating in L2
-        memRef = memAlloc(align: PAGE_SIZE, flags: MEM_FLAG_L1_NONALLOCATING)
-        if memRef < 0 {
-            fatalError("Couldn't allocate mailbox")
+        memRef = try memAlloc(align: PAGE_SIZE, flags: MEM_FLAG_L1_NONALLOCATING)
+        if memRef == 0 {
+            throw SwiftyGPIO.IoError(.write, detail: "Couldn't allocate mailbox")
         }
 
-        baseBusAddress = memLock()
+        baseBusAddress = try memLock()
         if baseBusAddress == ~0 {
             memFree()
-            fatalError("Couldn't lock mailbox")
+            throw SwiftyGPIO.IoError(.write, detail: "Couldn't lock mailbox")
         }
-        baseVirtualAddress = mapmem(UInt(baseBusAddress) & ~0xC0000000, size: size)
+        baseVirtualAddress = try mapmem(UInt(baseBusAddress) & ~0xC0000000, size: size)
     }
 
-    public mutating func cleanup() {
-        unmapmem(baseVirtualAddress, size: size)
-        memUnlock()
+    public mutating func cleanupOrThrow() throws {
+        var caughtError: Error?
+        do {
+            try unmapmem(baseVirtualAddress, size: size)
+        } catch {
+            caughtError = error
+        }
+        do {
+            try memUnlock()
+        } catch {
+            caughtError = error
+        }
         memFree()
         if mailboxFd >= 0 {
             mailboxClose(mailboxFd)
+        }
+        if let error = caughtError {
+            throw error
         }
     }
 
     /// MARK: Memory mapping methods
 
     /// Map the requested address with page alignement
-    private func mapmem(_ address: UInt, size: Int) -> UnsafeMutableRawPointer {
+    private func mapmem(_ address: UInt, size: Int) throws -> UnsafeMutableRawPointer {
         var mem_fd: Int32 = 0
         let offset = Int(address) % PAGE_SIZE
         let ad = Int(address) - offset
@@ -121,7 +142,7 @@ public struct MailBox {
         //Try to open one of the mem devices
         mem_fd = open("/dev/mem", O_RDWR | O_SYNC)
         guard mem_fd > 0 else {
-            fatalError("Can't open /dev/mem , use sudo!")
+            throw SwiftyGPIO.IoError(.open, detail: "Can't open /dev/mem , use sudo!")
         }
 
         let base_map = mmap(
@@ -137,21 +158,20 @@ public struct MailBox {
 
         let basePointer = base_map.assumingMemoryBound(to: UInt.self)
         if basePointer.pointee == UInt(bitPattern: -1) {    //MAP_FAILED not available, but its value is (void*)-1
-            print("mapmem error: " + "\(basePointer)")
-            abort()
+            throw SwiftyGPIO.IoError(.write, detail: "mapmem error: \(basePointer)")
         }
 
         return UnsafeMutableRawPointer(basePointer) + offset
     }
 
     /// Unmap the page aligned pointer
-    private func unmapmem(_ pointer: UnsafeMutableRawPointer, size: Int) {
+    private func unmapmem(_ pointer: UnsafeMutableRawPointer, size: Int) throws {
         let address = UInt(bitPattern: pointer)
         let offset = address % UInt(PAGE_SIZE)
         let alignedAddress = pointer - Int(offset)
         let res = munmap(alignedAddress, size)
         guard res == 0 else {
-            fatalError("Couldn't unmapmem: \(alignedAddress)")
+            throw SwiftyGPIO.IoError(.internalError, detail: "Couldn't unmapmem: \(alignedAddress)")
         }
     }
 
@@ -204,7 +224,7 @@ public struct MailBox {
 
     /// Perform and ioctl ont he mailbox, if the mailbox is not already open, it opens it
     @discardableResult
-    private func mailboxSetProperty(buf: UnsafeMutableRawPointer) -> Int32 {
+    private func mailboxSetProperty(buf: UnsafeMutableRawPointer) throws -> Int32 {
         var fd: Int32 = mailboxFd
         var ret_val: Int32 = -1
 
@@ -216,13 +236,13 @@ public struct MailBox {
         if fd >= 0 {
             ret_val = ioctl(fd, IOCTL_MBOX_PROPERTY, buf)
 
-            if ret_val < 0 {
-                fatalError("ioctl on mailbox failed!")
-            }
-
             // Close temporary handle
             if mailboxFd < 0 {
                 mailboxClose(fd)
+            }
+
+            if ret_val < 0 {
+                throw SwiftyGPIO.IoError(.ioControl, detail: "ioctl on mailbox failed!")
             }
         }
 
@@ -232,7 +252,7 @@ public struct MailBox {
     /// MARK: Mailbox Memory methods
 
     /// Allocates contiguous memory on the GPU. size and alignment are in bytes.
-    private func memAlloc(align: Int, flags: Int) -> UInt32 {
+    private func memAlloc(align: Int, flags: Int) throws -> UInt32 {
         var i = 0
         var p = [UInt32](repeating:0x0, count:32)
 
@@ -256,7 +276,7 @@ public struct MailBox {
         i += 1
         p[0] = UInt32(i * MemoryLayout<UInt32>.size)  // Actual size
 
-        if mailboxSetProperty(buf: &p) < 0 {
+        if try mailboxSetProperty(buf: &p) < 0 {
             return 0
         } else {
             return p[5]           // Handle
@@ -284,11 +304,11 @@ public struct MailBox {
         i += 1
         p[0] = UInt32(i * MemoryLayout<UInt32>.size)  // Actual size
 
-        mailboxSetProperty(buf: &p)
+        _ = try? mailboxSetProperty(buf: &p)
     }
 
     /// Lock buffer in place, and return a bus address. Must be done before memory can be accessed.
-    private func memLock() -> UInt32 {
+    private func memLock() throws -> UInt32 {
         var i = 0
         var p = [UInt32](repeating:0x0, count:32)
 
@@ -308,7 +328,7 @@ public struct MailBox {
         i += 1
         p[0] = UInt32(i * MemoryLayout<UInt32>.size)  // Actual size
 
-        if mailboxSetProperty(buf: &p) < 0 {
+        if try mailboxSetProperty(buf: &p) < 0 {
             return ~0
         } else {
             return p[5]     // bus address of locked memory block
@@ -316,7 +336,7 @@ public struct MailBox {
     }
 
     /// Unlock buffer. It retains contents, but may move. Needs to be locked before next use.
-    private func memUnlock() {
+    private func memUnlock() throws {
         var i = 0
         var p = [UInt32](repeating:0x0, count:32)
 
@@ -336,7 +356,7 @@ public struct MailBox {
         i += 1
         p[0] = UInt32(i * MemoryLayout<UInt32>.size)  // Actual size
 
-        mailboxSetProperty(buf: &p)
+        try mailboxSetProperty(buf: &p)
     }
 }
 
@@ -351,6 +371,6 @@ func swift_makedev(_ major: UInt, _ minor: UInt) -> UInt64 {
 }
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX) || os(iOS)
+#if !os(Linux)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

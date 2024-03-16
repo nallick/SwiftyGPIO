@@ -65,39 +65,53 @@ public final class SysFSOneWire: OneWireInterface {
     }
 
     public func getSlaves() -> [String] {
-        let listpath = ONEWIREBASEPATH + "w1_bus_master" + String(masterId) + "/w1_master_slaves"
-        return readFile(listpath)
+        do {
+            return try getSlavesOrThrow()
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
     }
 
     public func readData(_ slaveId: String) -> [String] {
-        let devicepath = ONEWIREBASEPATH + slaveId + "/w1_slave"
-        return readFile(devicepath)
+        do {
+            return try readDataOrThrow(slaveId)
+        } catch {
+            SwiftyGPIO.abort(logging: error)
+        }
     }
 
-    private func readFile(_ pathname: String) -> [String] {
+    public func getSlavesOrThrow() throws -> [String] {
+        let listpath = ONEWIREBASEPATH + "w1_bus_master" + String(masterId) + "/w1_master_slaves"
+        return try readFile(listpath)
+    }
+
+    public func readDataOrThrow(_ slaveId: String) throws -> [String] {
+        let devicepath = ONEWIREBASEPATH + slaveId + "/w1_slave"
+        return try readFile(devicepath)
+    }
+
+    private func readFile(_ pathname: String) throws -> [String] {
         let fd = open(pathname, O_RDONLY | O_SYNC)
+        defer { if fd > 0 { close(fd) }}
         guard fd > 0, let file = fdopen(fd, "r") else {
-            perror("Couldn't open 1-Wire device: "+pathname)
-            abort()
+            throw SwiftyGPIO.IoError(.open, detail: "Couldn't open 1-Wire device: "+pathname)
         }
 
         var lines = [String]()
-        while let s = readLine(maxLength: 128, file: file) {
+        while let s = try readLine(maxLength: 128, file: file) {
             lines.append(s)
         }
 
-        close(fd)
-        return lines      
+        return lines
     }
 
-    func readLine(maxLength: Int = 128, file: UnsafeMutablePointer<FILE>!) -> String? {
+    private func readLine(maxLength: Int = 128, file: UnsafeMutablePointer<FILE>!) throws -> String? {
         var buffer = [CChar](repeating: 0, count: maxLength)
         guard fgets(&buffer, Int32(maxLength), file) != nil else {
             if feof(file) != 0 {
                 return nil
             } else {
-                perror("Error while reading from 1-Wire interface")
-                abort()
+                throw SwiftyGPIO.IoError(.read, detail: "Error while reading from 1-Wire interface")
             }
         }
         return String(cString: buffer).trimmingCharacters(in: CharacterSet.newlines)
