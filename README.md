@@ -547,7 +547,7 @@ print("Value: "+String(gp0.value))
 This second example makes a led blink with a frequency of 150ms:
 
 ```Swift
-import Glibc
+import Glibc  // or Musl for Alpine Linux
 
 let gpios = SwiftyGPIO.GPIOs(for:.CHIP)
 var gp0 = gpios[.P0]!

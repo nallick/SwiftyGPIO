@@ -22,10 +22,13 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.)
  */
-#if os(Linux)
-    import Glibc
+
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
 #else
-    import Darwin.C
+import Darwin.C
 #endif
 
 extension SwiftyGPIO {

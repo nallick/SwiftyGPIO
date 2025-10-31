@@ -23,11 +23,14 @@
  SOFTWARE.)
  */
 
-#if os(Linux)
-    import Glibc
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
 #else
-    import Darwin.C
+import Darwin.C
 #endif
+
 import Foundation
 
 // To enable tracing errors back to the line of code where the error is thrown build your SwiftyGPIO client with the command:
@@ -49,8 +52,10 @@ extension SwiftyGPIO {
 
     internal static func abort(logging error: Error) -> Never {
         SwiftyGPIO.abortLoggingFunction("\(error)")
-#if os(Linux)
+#if canImport(Glibc)
         Glibc.abort()
+#elseif canImport(Musl)
+        Musl.abort()
 #else
         Darwin.abort()
 #endif
