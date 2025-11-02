@@ -99,7 +99,7 @@ extension SwiftyGPIO {
         #else
 
         public var description: String {
-            return detail
+            return "\(detail) [\(type)]"
         }
 
         public init(_ type: ErrorType, detail: String) {

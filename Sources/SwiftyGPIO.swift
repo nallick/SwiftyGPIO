@@ -266,7 +266,7 @@ fileprivate extension GPIO {
 
     func writeToFile(_ path: String, value: String) throws {
         let fp = fopen(path, "w")
-        guard fp != nil else { return }
+        guard fp != nil else { throw SwiftyGPIO.IoError(.write, detail: "Can't open file \(path)") }
         defer { fclose(fp) }
         var value = value
         let res = value.withUTF8 { buffer in
@@ -274,7 +274,7 @@ fileprivate extension GPIO {
         }
         if res < 0 {
             if ferror(fp) != 0 {
-                throw SwiftyGPIO.IoError(.write, detail: "Error while writing to file")
+                throw SwiftyGPIO.IoError(.write, detail: "Error writing to file \(path): \(ferror(fp))")
             }
         }
     }
@@ -283,7 +283,7 @@ fileprivate extension GPIO {
         let MAXLEN = 8
 
         let fp = fopen(path, "r")
-        guard fp != nil else { return nil }
+        guard fp != nil else { throw SwiftyGPIO.IoError(.read, detail: "Can't open file \(path)") }
         defer { fclose(fp) }
         var buf = (CChar(0), CChar(0), CChar(0), CChar(0),
                    CChar(0), CChar(0), CChar(0), CChar(0))
@@ -292,7 +292,7 @@ fileprivate extension GPIO {
             let len = fread(buffer.baseAddress, MAXLEN, 1, fp)
             if len < MAXLEN {
                 if ferror(fp) != 0 {
-                    throw SwiftyGPIO.IoError(.read, detail: "Error while reading from file")
+                    throw SwiftyGPIO.IoError(.read, detail: "Error reading from file \(path): \(ferror(fp))")
                 }
             }
 
